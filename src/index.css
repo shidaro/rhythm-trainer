@@ -348,3 +348,217 @@ p {
   margin: 8px 0;
   padding-left: 18px;
 }
+
+/* ---------- navigation & lists ---------- */
+
+.top h1 {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.back {
+  padding: 6px 12px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.section-title {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 4px 0 8px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+button.row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  padding: 14px;
+  border-radius: 14px;
+}
+
+.row .num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--pad);
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  flex: none;
+}
+
+.row .title {
+  flex: 1;
+}
+
+.row-stars,
+.stars {
+  color: var(--border);
+  letter-spacing: 2px;
+}
+
+.row-stars .on,
+.stars .on {
+  color: var(--good);
+}
+
+.lab-link {
+  margin-top: auto;
+  font-weight: 500;
+}
+
+button.banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  border-color: var(--accent);
+  font-weight: 400;
+}
+
+/* ---------- exercise ---------- */
+
+.notation-card {
+  padding: 8px 10px;
+}
+
+.notation {
+  width: 100%;
+  min-height: 90px;
+  color: var(--text);
+}
+
+.notation svg {
+  display: block;
+}
+
+.notation svg path,
+.notation svg rect,
+.notation svg text {
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.notation svg .ev path,
+.notation svg .ev text {
+  transition: fill 80ms, stroke 80ms;
+}
+
+.notation svg .ev.current path,
+.notation svg .ev.current text {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.notation svg .ev.perfect path,
+.notation svg .ev.perfect text {
+  fill: var(--perfect);
+  stroke: var(--perfect);
+}
+
+.notation svg .ev.good path,
+.notation svg .ev.good text {
+  fill: var(--good);
+  stroke: var(--good);
+}
+
+.notation svg .ev.miss path,
+.notation svg .ev.miss text {
+  fill: var(--miss);
+  stroke: var(--miss);
+}
+
+.status.small {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.status.count {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.tempo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tempo button {
+  width: 40px;
+  padding: 8px 0;
+}
+
+.tempo > span {
+  min-width: 72px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.toggle input {
+  accent-color: var(--accent);
+  width: 18px;
+  height: 18px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.result {
+  text-align: center;
+}
+
+.stars {
+  font-size: 2rem;
+}
+
+.score {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.record {
+  color: var(--good);
+  font-size: 1rem;
+}
+
+.stats .perfect {
+  color: var(--perfect);
+}
+.stats .good {
+  color: var(--good);
+}
+.stats .miss {
+  color: var(--miss);
+}
+
+.tendency {
+  margin-top: 8px;
+}

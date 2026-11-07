@@ -40,19 +40,47 @@ export class AudioEngine {
     src.start();
   }
 
-  /** Schedules a short click at audio time `time`. */
-  click(time: number, accent: boolean): void {
+  /** Schedules a short metronome click at audio time `time`. */
+  click(time: number, accent: boolean, volume = 1): AudioScheduledSourceNode {
+    return this.tone(time, accent ? 1760 : 1175, (accent ? 0.9 : 0.6) * volume, 0.05, 'triangle');
+  }
+
+  /** Schedules a woodblock-like "note" sound used to play rhythms back. */
+  note(time: number): AudioScheduledSourceNode {
     const { ctx } = this;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.value = accent ? 1760 : 1175;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, time);
+    osc.frequency.exponentialRampToValueAtTime(560, time + 0.08);
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(accent ? 0.9 : 0.6, time + 0.001);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.9, time + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.14);
     osc.connect(gain).connect(ctx.destination);
     osc.start(time);
-    osc.stop(time + 0.06);
+    osc.stop(time + 0.15);
+    return osc;
+  }
+
+  private tone(
+    time: number,
+    freq: number,
+    peak: number,
+    decay: number,
+    type: OscillatorType,
+  ): AudioScheduledSourceNode {
+    const { ctx } = this;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), time + 0.001);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(time);
+    osc.stop(time + decay + 0.01);
+    return osc;
   }
 
   /**

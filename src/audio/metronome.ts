@@ -8,6 +8,8 @@ export interface MetronomeOptions {
   beatsPerBar: number;
   /** Stop after this many beats (undefined = endless). */
   maxBeats?: number;
+  /** Return false to keep a beat silent (it is still scheduled and reported). */
+  audible?: (index: number) => boolean;
   /** Called for each beat as it is scheduled (ahead of time). */
   onSchedule?: (index: number, time: number) => void;
   /** Called shortly after the last beat has sounded. */
@@ -65,7 +67,9 @@ export class Metronome {
         }, waitMs);
         return;
       }
-      this.engine.click(this.nextTime, this.index % beatsPerBar === 0);
+      if (this.opts.audible?.(this.index) ?? true) {
+        this.engine.click(this.nextTime, this.index % beatsPerBar === 0);
+      }
       onSchedule?.(this.index, this.nextTime);
       this.nextTime += period;
       this.index++;
