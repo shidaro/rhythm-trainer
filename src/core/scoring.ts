@@ -12,8 +12,19 @@ export interface NoteResult {
   grade: Grade;
 }
 
+/** How a single tap was judged: its note's grade, or 'extra' if it matched no note. */
+export type TapGrade = Grade | 'extra';
+
+export interface TapResult {
+  /** Latency-corrected tap time (seconds, audio clock). */
+  time: number;
+  grade: TapGrade;
+}
+
 export interface ScoreResult {
   notes: NoteResult[];
+  /** One entry per tap, in input order. */
+  taps: TapResult[];
   extraTaps: number;
   /** 0..100 */
   score: number;
@@ -56,11 +67,11 @@ export function scoreRhythm(
   pairs.sort((a, b) => Math.abs(a.dev) - Math.abs(b.dev));
 
   const devByNote = new Map<number, number>();
-  const usedTaps = new Set<number>();
+  const devByTap = new Map<number, number>();
   for (const p of pairs) {
-    if (devByNote.has(p.e) || usedTaps.has(p.t)) continue;
+    if (devByNote.has(p.e) || devByTap.has(p.t)) continue;
     devByNote.set(p.e, p.dev);
-    usedTaps.add(p.t);
+    devByTap.set(p.t, p.dev);
   }
 
   const notes: NoteResult[] = expected.map((ex, e) => {
@@ -73,14 +84,19 @@ export function scoreRhythm(
     };
   });
 
-  const extraTaps = taps.length - usedTaps.size;
+  const tapResults: TapResult[] = corrected.map((time, t) => {
+    const dev = devByTap.get(t);
+    return { time, grade: dev === undefined ? 'extra' : grade(dev) };
+  });
+
+  const extraTaps = taps.length - devByTap.size;
   const points = notes.reduce((s, n) => s + POINTS[n.grade], 0) - extraTaps * EXTRA_PENALTY;
   const score = expected.length ? Math.max(0, Math.round((points / expected.length) * 100)) : 0;
   const stars = score >= 90 ? 3 : score >= 75 ? 2 : score >= 50 ? 1 : 0;
   const played = [...devByNote.values()];
   const meanMs = played.length ? played.reduce((s, d) => s + d, 0) / played.length : 0;
 
-  return { notes, extraTaps, score, stars, meanMs };
+  return { notes, taps: tapResults, extraTaps, score, stars, meanMs };
 }
 
 /**

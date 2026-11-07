@@ -465,24 +465,6 @@ button.banner {
   stroke: var(--accent);
 }
 
-.notation svg .ev.perfect path,
-.notation svg .ev.perfect text {
-  fill: var(--perfect);
-  stroke: var(--perfect);
-}
-
-.notation svg .ev.good path,
-.notation svg .ev.good text {
-  fill: var(--good);
-  stroke: var(--good);
-}
-
-.notation svg .ev.miss path,
-.notation svg .ev.miss text {
-  fill: var(--miss);
-  stroke: var(--miss);
-}
-
 .status.small {
   font-size: 1rem;
   font-weight: 500;
@@ -581,19 +563,24 @@ button.icon {
   padding: 2px 4px 0;
 }
 
-.notation svg .mark path {
-  fill: transparent;
-  stroke: none;
-  transition: fill 120ms;
+.notation svg .missed-mark {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 1.5;
 }
 
-.notation svg .mark.perfect path {
+.notation svg .missed-mark.on {
+  stroke: var(--miss);
+}
+
+.notation svg .tap-dot.perfect {
   fill: var(--perfect);
 }
-.notation svg .mark.good path {
+.notation svg .tap-dot.good {
   fill: var(--good);
 }
-.notation svg .mark.miss path {
+.notation svg .tap-dot.miss,
+.notation svg .tap-dot.extra {
   fill: var(--miss);
 }
 

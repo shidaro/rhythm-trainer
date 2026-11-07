@@ -55,6 +55,7 @@ describe('scoreRhythm', () => {
     expect(r.notes.map((n) => n.grade)).toEqual(['perfect', 'miss', 'good', 'miss']);
     expect(r.notes[1].deviationMs).toBeNull();
     expect(r.extraTaps).toBe(2);
+    expect(r.taps.map((t) => t.grade)).toEqual(['perfect', 'extra', 'good', 'extra']);
     expect(r.score).toBe(Math.round(((1 + 0.6 - 2 * 0.5) / 4) * 100));
   });
 
