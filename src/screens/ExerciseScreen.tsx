@@ -7,9 +7,9 @@ import { TapPad } from '../components/TapPad';
 import type { Flash } from '../components/TapPad';
 import type { Exercise } from '../content/reading';
 import { flatten, measureTicks, noteOnsets, secondsPerTick } from '../core/rhythm';
-import { scoreRhythm } from '../core/scoring';
+import { matchTapLive, scoreRhythm } from '../core/scoring';
 import type { ScoreResult } from '../core/scoring';
-import { fmtMs } from '../lib/format';
+import { grade } from '../core/timing';
 import { recordResult } from '../lib/progress';
 import { load, save } from '../lib/storage';
 import { keepAwake, releaseAwake } from '../lib/wakeLock';
@@ -25,10 +25,11 @@ interface Props {
   exercise: Exercise;
   offsetMs: number;
   onBack: () => void;
+  onOpenSettings: () => void;
   onNext?: () => void;
 }
 
-export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: Props) {
+export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSettings, onNext }: Props) {
   const { rhythm } = exercise;
   const flat = useMemo(() => flatten(rhythm), [rhythm]);
   const beatsPerBar = rhythm.time.beats;
@@ -38,6 +39,8 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
   const tapsRef = useRef<number[]>([]);
   const startRef = useRef(0);
   const onsetsRef = useRef<{ index: number; time: number }[]>([]);
+  /** Positions in onsetsRef already matched by a live tap. */
+  const liveMatchedRef = useRef<Set<number>>(new Set());
 
   const [phase, setPhase] = useState<Phase>('ready');
   const [bpm, setBpm] = useState(exercise.bpm);
@@ -47,6 +50,7 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [record, setRecord] = useState(false);
   const [flash, setFlash] = useState<Flash | null>(null);
+  const [liveMarks, setLiveMarks] = useState<ReadonlyMap<number, NoteMark>>(new Map());
 
   useEffect(() => save(METRONOME_KEY, metronomeOn), [metronomeOn]);
 
@@ -114,6 +118,8 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
     silence();
     tapsRef.current = [];
     startRef.current = 0;
+    liveMatchedRef.current = new Set();
+    setLiveMarks(new Map());
     setFlash(null);
     if (kind === 'play') setResult(null);
     const countInBeats = beatsPerBar;
@@ -129,7 +135,7 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
         startRef.current = time + countInBeats * period;
         onsetsRef.current = noteOnsets(rhythm, bpm, startRef.current);
         if (kind === 'listen') {
-          nodesRef.current = onsetsRef.current.map((o) => engine.note(o.time));
+          nodesRef.current = onsetsRef.current.flatMap((o) => engine.rhythmNote(o.time));
         }
       },
       onEnd:
@@ -152,15 +158,34 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
   };
 
   const onTap = (timeStamp: number) => {
+    engine.tapNow();
     if (phase !== 'play') return;
-    tapsRef.current.push(engine.perfToAudio(timeStamp));
-    setFlash({ grade: 'neutral', key: timeStamp });
+    const t = engine.perfToAudio(timeStamp);
+    tapsRef.current.push(t);
+    const onsets = onsetsRef.current;
+    const first = onsets[0]?.time;
+    // Taps during the count-in only make a sound.
+    if (first === undefined || t - offsetMs / 1000 < first - EARLY_IGNORE_S) {
+      setFlash({ grade: 'neutral', key: timeStamp });
+      return;
+    }
+    const m = matchTapLive(onsets, liveMatchedRef.current, t, offsetMs);
+    if (!m) {
+      setFlash({ grade: 'miss', key: timeStamp });
+      return;
+    }
+    liveMatchedRef.current.add(m.pos);
+    const g = grade(m.deviationMs);
+    const index = onsets[m.pos].index;
+    setLiveMarks((prev) => new Map(prev).set(index, g));
+    setFlash({ grade: g, key: timeStamp });
   };
 
   const marks = useMemo(() => {
+    if (phase === 'play') return liveMarks;
     if (!result || phase !== 'result') return undefined;
     return new Map<number, NoteMark>(result.notes.map((n) => [n.index, n.grade]));
-  }, [result, phase]);
+  }, [result, phase, liveMarks]);
 
   const counts = result
     ? {
@@ -177,35 +202,65 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
   else if (phase === 'listen') status = 'Слушай ритм';
 
   return (
-    <main className="app">
+    <main className="app exercise">
       <header className="top">
         <button className="back" onClick={onBack} aria-label="Назад">
           ←
         </button>
         <h1>{exercise.title}</h1>
-        <span className="badge">
-          {rhythm.time.beats}/{rhythm.time.unit}
-        </span>
+        <button className="icon" onClick={onOpenSettings} disabled={running} aria-label="Настройки">
+          ⚙︎
+        </button>
       </header>
 
       <section className="card notation-card">
+        <div className="notation-meta">
+          <span>
+            размер {rhythm.time.beats}/{rhythm.time.unit}
+          </span>
+          <span>{bpm} BPM</span>
+        </div>
         <Notation rhythm={rhythm} current={current} marks={marks} />
       </section>
 
-      <p className={`status small ${countIn !== null ? 'count' : ''}`}>{status}</p>
+      <div className="toolbar">
+        <div className="tempo">
+          <button onClick={() => setBpm((b) => Math.max(40, b - 5))} disabled={running} aria-label="Медленнее">
+            −
+          </button>
+          <span>
+            <strong>{bpm}</strong>
+          </span>
+          <button onClick={() => setBpm((b) => Math.min(200, b + 5))} disabled={running} aria-label="Быстрее">
+            +
+          </button>
+        </div>
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={metronomeOn}
+            disabled={running}
+            onChange={(e) => setMetronomeOn(e.target.checked)}
+          />
+          <span className="track" aria-hidden />
+          метроном
+        </label>
+      </div>
 
-      {phase === 'result' && result && counts && (
-        <section className="card result">
-          <div className="stars" aria-label={`${result.stars} из 3`}>
-            {[1, 2, 3].map((s) => (
-              <span key={s} className={s <= result.stars ? 'on' : ''}>
-                ★
-              </span>
-            ))}
+      {phase === 'result' && result && counts ? (
+        <section className="card result compact">
+          <div className="result-head">
+            <span className="stars" aria-label={`${result.stars} из 3`}>
+              {[1, 2, 3].map((s) => (
+                <span key={s} className={s <= result.stars ? 'on' : ''}>
+                  ★
+                </span>
+              ))}
+            </span>
+            <span className="score">
+              {result.score}%{record && <span className="record"> рекорд!</span>}
+            </span>
           </div>
-          <p className="score">
-            {result.score}%{record && <span className="record"> · рекорд!</span>}
-          </p>
           <div className="stats">
             <div>
               <span className="perfect">{counts.perfect}</span>точно
@@ -222,56 +277,33 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onNext }: P
           </div>
           {Math.abs(result.meanMs) >= 15 && counts.miss < result.notes.length && (
             <p className="muted tendency">
-              В среднем ты {result.meanMs < 0 ? 'спешишь' : 'опаздываешь'} на {fmtMs(Math.abs(result.meanMs)).replace('+', '')}{' '}
-              мс
+              В среднем ты {result.meanMs < 0 ? 'спешишь' : 'опаздываешь'} на {Math.abs(result.meanMs).toFixed(0)} мс
             </p>
           )}
         </section>
+      ) : (
+        <p className={`status small ${countIn !== null ? 'count' : ''}`}>{status}</p>
       )}
 
-      <section className="card controls">
-        <div className="tempo">
-          <button onClick={() => setBpm((b) => Math.max(40, b - 5))} disabled={running} aria-label="Медленнее">
-            −
+      <div className="buttons">
+        {running ? (
+          <button className="danger" onClick={stop}>
+            Стоп
           </button>
-          <span>
-            <strong>{bpm}</strong> BPM
-          </span>
-          <button onClick={() => setBpm((b) => Math.min(200, b + 5))} disabled={running} aria-label="Быстрее">
-            +
-          </button>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={metronomeOn}
-              disabled={running}
-              onChange={(e) => setMetronomeOn(e.target.checked)}
-            />
-            Метроном
-          </label>
-        </div>
-        <div className="buttons">
-          {running ? (
-            <button className="danger" onClick={stop}>
-              Стоп
+        ) : (
+          <>
+            <button onClick={() => begin('listen')}>Послушать</button>
+            <button className="primary" onClick={() => begin('play')}>
+              {phase === 'result' ? 'Ещё раз' : 'Играть'}
             </button>
-          ) : (
-            <>
-              <button onClick={() => begin('listen')}>Послушать</button>
-              <button className="primary" onClick={() => begin('play')}>
-                {phase === 'result' ? 'Ещё раз' : 'Играть'}
-              </button>
-              {phase === 'result' && onNext && result && result.stars > 0 && (
-                <button onClick={onNext}>Дальше →</button>
-              )}
-            </>
-          )}
-        </div>
-      </section>
+            {phase === 'result' && onNext && result && result.stars > 0 && <button onClick={onNext}>Дальше →</button>}
+          </>
+        )}
+      </div>
 
       <TapPad
-        enabled={phase === 'play'}
-        label={phase === 'play' ? 'ТАП' : phase === 'listen' ? 'Слушай' : 'Нажми «Играть»'}
+        enabled={phase !== 'listen'}
+        label={phase === 'play' ? '' : phase === 'listen' ? 'Слушай' : 'Тапай здесь'}
         flash={flash}
         onTap={onTap}
       />

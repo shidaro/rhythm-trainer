@@ -1,9 +1,39 @@
-// Web Audio wrapper: unlocking on iOS, click synthesis, and mapping
-// DOM event timestamps (performance.now clock) to the audio clock.
+// Web Audio wrapper: unlocking on iOS, metronome/tap sounds with separate
+// volume buses, and mapping DOM event timestamps (performance.now clock) to
+// the audio clock.
+
+import * as drums from './drums';
+import type { Hit } from './drums';
 
 interface AudioSessionLike {
   type: string;
 }
+
+export type MetronomeSound = 'click' | 'drums' | 'hihat' | 'cowbell';
+export type TapSound = 'snare' | 'clap' | 'woodblock' | 'kick' | 'none';
+
+export interface SoundSettings {
+  metronome: MetronomeSound;
+  tap: TapSound;
+  /** 0..1 */
+  metronomeVolume: number;
+  /** 0..1 */
+  tapVolume: number;
+}
+
+export const DEFAULT_SOUNDS: SoundSettings = {
+  metronome: 'drums',
+  tap: 'snare',
+  metronomeVolume: 0.7,
+  tapVolume: 0.9,
+};
+
+const TAP_HITS: Record<Exclude<TapSound, 'none'>, Hit> = {
+  snare: drums.snare,
+  clap: drums.clap,
+  woodblock: drums.woodblock,
+  kick: drums.kick,
+};
 
 export interface Diagnostics {
   sampleRate: number;
@@ -15,9 +45,25 @@ export interface Diagnostics {
 
 export class AudioEngine {
   readonly ctx: AudioContext;
+  private readonly noise: AudioBuffer;
+  private readonly metronomeBus: GainNode;
+  private readonly tapBus: GainNode;
+  private sounds: SoundSettings = DEFAULT_SOUNDS;
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
+    this.noise = drums.createNoise(this.ctx);
+    this.metronomeBus = this.ctx.createGain();
+    this.tapBus = this.ctx.createGain();
+    this.metronomeBus.connect(this.ctx.destination);
+    this.tapBus.connect(this.ctx.destination);
+    this.setSounds(DEFAULT_SOUNDS);
+  }
+
+  setSounds(s: SoundSettings): void {
+    this.sounds = s;
+    this.metronomeBus.gain.value = s.metronomeVolume;
+    this.tapBus.gain.value = s.tapVolume;
   }
 
   /** Must be called from a user gesture (tap/click). */
@@ -40,53 +86,43 @@ export class AudioEngine {
     src.start();
   }
 
-  /** Schedules a short metronome click at audio time `time`. */
-  click(time: number, accent: boolean, volume = 1): AudioScheduledSourceNode {
-    return this.tone(time, accent ? 1760 : 1175, (accent ? 0.9 : 0.6) * volume, 0.05, 'triangle');
+  /** Schedules one metronome beat with the selected sound. */
+  beat(time: number, accent: boolean, sound: MetronomeSound = this.sounds.metronome): AudioScheduledSourceNode[] {
+    const { ctx, metronomeBus: out, noise } = this;
+    switch (sound) {
+      case 'click':
+        return drums.click(ctx, out, time, noise, accent ? 1 : 0.7);
+      case 'hihat':
+        return drums.hihat(ctx, out, time, noise, accent ? 1 : 0.6);
+      case 'cowbell':
+        return drums.cowbell(ctx, out, time, noise, accent ? 1 : 0.6);
+      case 'drums':
+        return accent
+          ? [...drums.kick(ctx, out, time, noise, 1), ...drums.hihat(ctx, out, time, noise, 0.8)]
+          : drums.hihat(ctx, out, time, noise, 0.7);
+    }
   }
 
-  /** Schedules a woodblock-like "note" sound used to play rhythms back. */
-  note(time: number): AudioScheduledSourceNode {
-    const { ctx } = this;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, time);
-    osc.frequency.exponentialRampToValueAtTime(560, time + 0.08);
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(0.9, time + 0.002);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.14);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(time);
-    osc.stop(time + 0.15);
-    return osc;
+  /** Schedules the "player" instrument: used for taps and for playing rhythms back. */
+  hit(time: number, sound: TapSound = this.sounds.tap): AudioScheduledSourceNode[] {
+    if (sound === 'none') return [];
+    return TAP_HITS[sound](this.ctx, this.tapBus, time, this.noise, 1);
   }
 
-  private tone(
-    time: number,
-    freq: number,
-    peak: number,
-    decay: number,
-    type: OscillatorType,
-  ): AudioScheduledSourceNode {
-    const { ctx } = this;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), time + 0.001);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(time);
-    osc.stop(time + decay + 0.01);
-    return osc;
+  /** Sound for listening to a rhythm: the tap instrument, or a woodblock if taps are silent. */
+  rhythmNote(time: number): AudioScheduledSourceNode[] {
+    return this.hit(time, this.sounds.tap === 'none' ? 'woodblock' : this.sounds.tap);
+  }
+
+  /** Immediate feedback for a tap. */
+  tapNow(): void {
+    this.hit(this.ctx.currentTime);
   }
 
   /**
    * Converts a performance.now()-based timestamp (e.g. PointerEvent.timeStamp)
    * into "audible" audio-clock time: the context time of the sample that was
-   * coming out of the speaker at that moment. A click scheduled at time t is
+   * coming out of the speaker at that moment. A sound scheduled at time t is
    * heard exactly when this function returns t.
    */
   perfToAudio(perfMs: number): number {

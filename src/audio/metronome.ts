@@ -68,7 +68,7 @@ export class Metronome {
         return;
       }
       if (this.opts.audible?.(this.index) ?? true) {
-        this.engine.click(this.nextTime, this.index % beatsPerBar === 0);
+        this.engine.beat(this.nextTime, this.index % beatsPerBar === 0);
       }
       onSchedule?.(this.index, this.nextTime);
       this.nextTime += period;

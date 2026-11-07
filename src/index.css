@@ -562,3 +562,190 @@ button:disabled {
 .tendency {
   margin-top: 8px;
 }
+
+/* ---------- stage 1.5: settings, live marks, pad ---------- */
+
+button.icon {
+  padding: 6px 10px;
+  font-size: 1.2rem;
+  line-height: 1;
+  border-color: transparent;
+  background: transparent;
+}
+
+.notation-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 2px 4px 0;
+}
+
+.notation svg .mark path {
+  fill: transparent;
+  stroke: none;
+  transition: fill 120ms;
+}
+
+.notation svg .mark.perfect path {
+  fill: var(--perfect);
+}
+.notation svg .mark.good path {
+  fill: var(--good);
+}
+.notation svg .mark.miss path {
+  fill: var(--miss);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch .track {
+  width: 42px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--border);
+  position: relative;
+  transition: background 150ms;
+}
+
+.switch .track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 150ms;
+}
+
+.switch input:checked + .track {
+  background: var(--perfect);
+}
+
+.switch input:checked + .track::after {
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.result.compact {
+  padding: 10px 14px;
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.result.compact .stars {
+  font-size: 1.5rem;
+}
+
+.result.compact .score {
+  font-size: 1.4rem;
+}
+
+.result.compact .stats {
+  margin-top: 6px;
+}
+
+.exercise .pad {
+  min-height: 150px;
+  background: color-mix(in srgb, var(--perfect) 14%, var(--surface));
+  border: 2px solid color-mix(in srgb, var(--perfect) 35%, transparent);
+}
+
+.exercise .pad:active {
+  background: color-mix(in srgb, var(--perfect) 22%, var(--surface));
+}
+
+/* Corner brackets: a quiet hint that the whole area is the tap target. */
+.exercise .pad::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  pointer-events: none;
+  --c: color-mix(in srgb, var(--perfect) 60%, transparent);
+  background:
+    linear-gradient(var(--c), var(--c)) top left / 22px 2px,
+    linear-gradient(var(--c), var(--c)) top left / 2px 22px,
+    linear-gradient(var(--c), var(--c)) top right / 22px 2px,
+    linear-gradient(var(--c), var(--c)) top right / 2px 22px,
+    linear-gradient(var(--c), var(--c)) bottom left / 22px 2px,
+    linear-gradient(var(--c), var(--c)) bottom left / 2px 22px,
+    linear-gradient(var(--c), var(--c)) bottom right / 22px 2px,
+    linear-gradient(var(--c), var(--c)) bottom right / 2px 22px;
+  background-repeat: no-repeat;
+}
+
+.setting {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setting h2 {
+  margin: 0;
+}
+
+.setting p {
+  font-size: 0.85rem;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.choices button {
+  padding: 10px 14px;
+  font-weight: 500;
+}
+
+.choices button.chosen {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.volume input {
+  flex: 1;
+  accent-color: var(--accent);
+}

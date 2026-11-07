@@ -108,6 +108,7 @@ export function TimingLab({ engine, offsetMs, onOffsetChange, onBack }: Props) {
   };
 
   const onTap = (timeStamp: number) => {
+    engine.tapNow();
     if (mode === 'idle') return;
     const t = engine.perfToAudio(timeStamp);
     if (mode === 'calibrating') {
@@ -234,7 +235,7 @@ export function TimingLab({ engine, offsetMs, onOffsetChange, onBack }: Props) {
         </section>
       )}
 
-      <TapPad enabled={mode !== 'idle'} label={mode === 'idle' ? 'Выбери режим' : 'ТАП'} flash={flash} onTap={onTap} />
+      <TapPad enabled label={mode === 'idle' ? 'Выбери режим' : 'ТАП'} flash={flash} onTap={onTap} />
 
       <details className="diag">
         <summary>Диагностика</summary>

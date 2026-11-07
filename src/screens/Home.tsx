@@ -5,14 +5,18 @@ interface Props {
   offsetMs: number | null;
   onOpenExercise: (id: string) => void;
   onOpenLab: () => void;
+  onOpenSettings: () => void;
 }
 
-export function Home({ offsetMs, onOpenExercise, onOpenLab }: Props) {
+export function Home({ offsetMs, onOpenExercise, onOpenLab, onOpenSettings }: Props) {
   const progress = loadProgress();
   return (
     <main className="app">
       <header className="top">
         <h1>Тренажёр ритма</h1>
+        <button className="icon" onClick={onOpenSettings} aria-label="Настройки">
+          ⚙︎
+        </button>
       </header>
 
       {offsetMs === null && (

@@ -14,7 +14,7 @@ interface Props {
 }
 
 const STAVE_HEIGHT = 80;
-const ROW_GAP = 4;
+const ROW_GAP = 12;
 /** VexFlow reserves room above the staff that a single-line rhythm staff does not need. */
 const STAVE_TOP_TRIM = 18;
 
@@ -83,7 +83,7 @@ function layoutRows(r: Rhythm, rowWidth: number): { rows: number; boxes: Box[] }
 
 function drawRhythm(host: HTMLDivElement, rhythm: Rhythm, width: number) {
   // Draw in a smaller logical space and scale up: bigger, easier-to-read notes on phones.
-  const scale = width < 420 ? 1.25 : 1.4;
+  const scale = width < 420 ? 1.15 : 1.35;
   const logical = width / scale;
   const usable = logical - 2;
   const firstExtra = 60; // room for clef + time signature in the first measure of a row
@@ -116,7 +116,7 @@ function drawRhythm(host: HTMLDivElement, rhythm: Rhythm, width: number) {
     stave.setContext(ctx).draw();
 
     const notes = events.map((e) => {
-      const note = new StaveNote({ keys: ['b/4'], duration: vfDuration(e), autoStem: false });
+      const note = new StaveNote({ keys: ['b/4'], duration: vfDuration(e), stemDirection: 1 });
       if (e.dotted) Dot.buildAndAttach([note], { all: true });
       indices.set(note, flat[flatIndex].index);
       flatIndex++;
@@ -125,11 +125,25 @@ function drawRhythm(host: HTMLDivElement, rhythm: Rhythm, width: number) {
 
     const voice = new Voice({ numBeats: rhythm.time.beats, beatValue: rhythm.time.unit });
     voice.addTickables(notes);
-    const beams = Beam.generateBeams(notes, { groups: beamGroups(rhythm) });
+    const beams = Beam.generateBeams(notes, { groups: beamGroups(rhythm), stemDirection: 1 });
     new Formatter().joinVoices([voice]).formatToStave([voice], stave);
     voice.draw(ctx, stave);
     beams.forEach((b) => b.setContext(ctx).draw());
     for (const note of notes) note.getSVGElement()?.classList.add('ev', `ev-${indices.get(note)}`);
+
+    // Result dots under every sounding note; hidden until the note gets a mark.
+    const dotY = stave.getYForLine(2) + 30;
+    events.forEach((e, k) => {
+      if (e.rest) return;
+      const note = notes[k];
+      const cx = (note.getNoteHeadBeginX() + note.getNoteHeadEndX()) / 2;
+      const group = ctx.openGroup('mark');
+      ctx.beginPath();
+      ctx.arc(cx, dotY, 4.5, 0, Math.PI * 2, false);
+      ctx.fill();
+      ctx.closeGroup();
+      (group as SVGElement | undefined)?.classList.add('mark', `mark-${indices.get(note)}`);
+    });
   });
 }
 
@@ -175,6 +189,12 @@ export function Notation({ rhythm, current, marks }: Props) {
       const i = Number(m[1]);
       el.classList.toggle('current', i === current);
       for (const k of ['perfect', 'good', 'miss'] as const) el.classList.toggle(k, marks?.get(i) === k);
+    });
+    host.querySelectorAll('.mark').forEach((el) => {
+      const m = /mark-(\d+)/.exec(el.getAttribute('class') ?? '');
+      if (!m) return;
+      const mark = marks?.get(Number(m[1]));
+      for (const k of ['perfect', 'good', 'miss'] as const) el.classList.toggle(k, mark === k);
     });
   }, [current, marks, rendered]);
 

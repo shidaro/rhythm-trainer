@@ -82,3 +82,27 @@ export function scoreRhythm(
 
   return { notes, extraTaps, score, stars, meanMs };
 }
+
+/**
+ * Real-time matching of one tap while playing: the closest not-yet-matched
+ * onset within the window. Returns the position in `expected` and the
+ * deviation in ms, or null for an extra tap.
+ */
+export function matchTapLive(
+  expected: readonly { index: number; time: number }[],
+  matched: ReadonlySet<number>,
+  tapTime: number,
+  offsetMs: number,
+): { pos: number; deviationMs: number } | null {
+  const t = tapTime - offsetMs / 1000;
+  const windowMs = matchWindowMs(expected.map((e) => e.time));
+  let best: { pos: number; deviationMs: number } | null = null;
+  expected.forEach((ex, pos) => {
+    if (matched.has(pos)) return;
+    const dev = (t - ex.time) * 1000;
+    if (Math.abs(dev) <= windowMs && (!best || Math.abs(dev) < Math.abs(best.deviationMs))) {
+      best = { pos, deviationMs: dev };
+    }
+  });
+  return best;
+}

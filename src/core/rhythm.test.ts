@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { flatten, noteOnsets, parseRhythm, totalTicks } from './rhythm';
-import { scoreRhythm } from './scoring';
+import { matchTapLive, scoreRhythm } from './scoring';
 
 describe('parseRhythm', () => {
   it('parses notes, rests and dots', () => {
@@ -62,5 +62,15 @@ describe('scoreRhythm', () => {
     const fast = noteOnsets(parseRhythm('4/4: 16 16 16 16 h.'), 60, 0);
     const r = scoreRhythm(fast, [0.125], 0);
     expect(r.notes.filter((n) => n.deviationMs !== null)).toHaveLength(1);
+  });
+});
+
+describe('matchTapLive', () => {
+  const expected = noteOnsets(parseRhythm('4/4: q q q q'), 60, 0);
+
+  it('matches the closest free note and skips taken ones', () => {
+    expect(matchTapLive(expected, new Set(), 1.03, 0)).toEqual({ pos: 1, deviationMs: expect.closeTo(30) });
+    expect(matchTapLive(expected, new Set([1]), 1.03, 0)).toBeNull();
+    expect(matchTapLive(expected, new Set(), 2.06, 50)!.pos).toBe(2);
   });
 });
