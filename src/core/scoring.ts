@@ -19,6 +19,8 @@ export interface TapResult {
   /** Latency-corrected tap time (seconds, audio clock). */
   time: number;
   grade: TapGrade;
+  /** Position in `expected` of the note this tap was matched to. */
+  note?: number;
 }
 
 export interface ScoreResult {
@@ -67,11 +69,11 @@ export function scoreRhythm(
   pairs.sort((a, b) => Math.abs(a.dev) - Math.abs(b.dev));
 
   const devByNote = new Map<number, number>();
-  const devByTap = new Map<number, number>();
+  const matchByTap = new Map<number, { note: number; dev: number }>();
   for (const p of pairs) {
-    if (devByNote.has(p.e) || devByTap.has(p.t)) continue;
+    if (devByNote.has(p.e) || matchByTap.has(p.t)) continue;
     devByNote.set(p.e, p.dev);
-    devByTap.set(p.t, p.dev);
+    matchByTap.set(p.t, { note: p.e, dev: p.dev });
   }
 
   const notes: NoteResult[] = expected.map((ex, e) => {
@@ -85,11 +87,12 @@ export function scoreRhythm(
   });
 
   const tapResults: TapResult[] = corrected.map((time, t) => {
-    const dev = devByTap.get(t);
-    return { time, grade: dev === undefined ? 'extra' : grade(dev) };
+    const match = matchByTap.get(t);
+    if (!match) return { time, grade: 'extra' };
+    return { time, grade: grade(match.dev), note: match.note };
   });
 
-  const extraTaps = taps.length - devByTap.size;
+  const extraTaps = taps.length - matchByTap.size;
   const points = notes.reduce((s, n) => s + POINTS[n.grade], 0) - extraTaps * EXTRA_PENALTY;
   const score = expected.length ? Math.max(0, Math.round((points / expected.length) * 100)) : 0;
   const stars = score >= 90 ? 3 : score >= 75 ? 2 : score >= 50 ? 1 : 0;

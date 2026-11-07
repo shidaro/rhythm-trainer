@@ -28,6 +28,13 @@ describe('tickToPoint', () => {
     expect(tickToPoint(geoms, 72)).toEqual({ x: 160, y: 150 });
   });
 
+  it('keeps an early tap in the row of its note', () => {
+    const p = tickToPoint(geoms, 47, 48)!;
+    expect(p.y).toBe(150);
+    expect(p.x).toBeLessThan(20);
+    expect(p.x).toBeGreaterThanOrEqual(10);
+  });
+
   it('extrapolates early taps but not past the left edge', () => {
     expect(tickToPoint(geoms, -2)!.x).toBeCloseTo(100 - (2 * 100) / 24);
     expect(tickToPoint(geoms, -100)!.x).toBe(80);

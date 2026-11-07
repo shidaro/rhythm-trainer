@@ -6,7 +6,7 @@ import type { TapDot } from '../components/Notation';
 import { TapPad } from '../components/TapPad';
 import type { Flash } from '../components/TapPad';
 import type { Exercise } from '../content/reading';
-import { flatten, measureTicks, noteOnsets, secondsPerTick } from '../core/rhythm';
+import { beatTicks, flatten, measureTicks, noteOnsets, secondsPerTick, totalTicks } from '../core/rhythm';
 import { matchTapLive, matchWindowMs, scoreRhythm } from '../core/scoring';
 import type { ScoreResult } from '../core/scoring';
 import { grade } from '../core/timing';
@@ -14,11 +14,22 @@ import { recordResult } from '../lib/progress';
 import { load, save } from '../lib/storage';
 import { keepAwake, releaseAwake } from '../lib/wakeLock';
 
-type Phase = 'ready' | 'play' | 'listen' | 'result';
+type Phase = 'ready' | 'play' | 'paused' | 'listen' | 'result';
 
 const METRONOME_KEY = 'rt.metronomeDuringPlay';
 /** Taps earlier than this before the first note belong to the count-in and are ignored. */
 const EARLY_IGNORE_S = 0.2;
+
+/**
+ * A stretch of continuous playback. Everything else uses "rhythm time":
+ * seconds from the start of the rhythm, latency-corrected, so an attempt
+ * can be paused and resumed (with a fresh count-in) without breaking scoring.
+ */
+interface Segment {
+  /** Audio-clock time at which `startTick` sounds. */
+  audioStart: number;
+  startTick: number;
+}
 
 interface Props {
   engine: AudioEngine;
@@ -33,28 +44,44 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
   const { rhythm } = exercise;
   const flat = useMemo(() => flatten(rhythm), [rhythm]);
   const beatsPerBar = rhythm.time.beats;
-
-  const metronomeRef = useRef<Metronome | null>(null);
-  const nodesRef = useRef<AudioScheduledSourceNode[]>([]);
-  const tapsRef = useRef<number[]>([]);
-  const startRef = useRef(0);
-  const onsetsRef = useRef<{ index: number; time: number }[]>([]);
-  /** Positions in onsetsRef already matched by a live tap. */
-  const liveMatchedRef = useRef<Set<number>>(new Set());
+  const total = totalTicks(rhythm);
+  const perMeasure = measureTicks(rhythm.time);
 
   const [phase, setPhase] = useState<Phase>('ready');
   const [bpm, setBpm] = useState(exercise.bpm);
   const [metronomeOn, setMetronomeOn] = useState(() => load(METRONOME_KEY, true));
   const [current, setCurrent] = useState<number | undefined>(undefined);
   const [countIn, setCountIn] = useState<number | null>(null);
+  const [pausedTick, setPausedTick] = useState(0);
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [record, setRecord] = useState(false);
   const [flash, setFlash] = useState<Flash | null>(null);
   const [liveTaps, setLiveTaps] = useState<TapDot[]>([]);
-  const [resultTaps, setResultTaps] = useState<TapDot[]>([]);
   const [liveMissed, setLiveMissed] = useState<ReadonlySet<number>>(new Set());
+  const [resultTaps, setResultTaps] = useState<TapDot[]>([]);
+
+  const spt = secondsPerTick(rhythm, bpm);
+  /** Expected notes in rhythm time (start = 0). */
+  const onsets = useMemo(() => noteOnsets(rhythm, bpm, 0), [rhythm, bpm]);
+  const windowS = useMemo(() => matchWindowMs(onsets.map((o) => o.time)) / 1000, [onsets]);
+
+  const metronomeRef = useRef<Metronome | null>(null);
+  const nodesRef = useRef<AudioScheduledSourceNode[]>([]);
+  const segRef = useRef<Segment | null>(null);
+  /** Taps in rhythm time. */
+  const tapsRef = useRef<number[]>([]);
+  /** Positions in `onsets` already matched by a live tap. */
+  const liveMatchedRef = useRef<Set<number>>(new Set());
+  const progressRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => save(METRONOME_KEY, metronomeOn), [metronomeOn]);
+
+  const setProgress = useCallback(
+    (tick: number) => {
+      if (progressRef.current) progressRef.current.style.width = `${Math.min(100, (tick / total) * 100)}%`;
+    },
+    [total],
+  );
 
   const silence = useCallback(() => {
     metronomeRef.current?.stop();
@@ -67,6 +94,7 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
       }
     }
     nodesRef.current = [];
+    segRef.current = null;
     setCurrent(undefined);
     setCountIn(null);
     void releaseAwake();
@@ -74,84 +102,89 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
 
   useEffect(() => silence, [silence]);
 
-  // Playhead + count-in display, driven by what is audible now.
+  // Progress bar for phases where nothing is moving.
+  useEffect(() => {
+    if (phase === 'ready') setProgress(0);
+    else if (phase === 'result') setProgress(total);
+    else if (phase === 'paused') setProgress(pausedTick);
+  }, [phase, pausedTick, total, setProgress]);
+
+  // Playhead, count-in, progress and live "missed" detection, driven by what is audible now.
   useEffect(() => {
     if (phase !== 'play' && phase !== 'listen') return;
-    const spt = secondsPerTick(rhythm, bpm);
     const period = 60 / bpm;
-    const total = rhythm.measures.length * measureTicks(rhythm.time);
     let raf = 0;
     const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const seg = segRef.current;
+      if (!seg) return;
       const now = engine.audibleNow();
-      const start = startRef.current;
-      if (start && now < start) {
-        const beat = Math.floor((now - (start - beatsPerBar * period)) / period);
+      if (now < seg.audioStart) {
+        const beat = Math.floor((now - (seg.audioStart - beatsPerBar * period)) / period);
         setCountIn(beat >= 0 ? beat + 1 : null);
         setCurrent(undefined);
-      } else if (start) {
-        setCountIn(null);
-        const tick = (now - start) / spt;
-        if (phase === 'play') {
-          // A note is missed once its window has passed without a matching tap.
-          const onsets = onsetsRef.current;
-          const windowS = matchWindowMs(onsets.map((o) => o.time)) / 1000;
-          const heard = now - offsetMs / 1000;
-          const missedNow: number[] = [];
-          onsets.forEach((o, pos) => {
-            if (!liveMatchedRef.current.has(pos) && o.time + windowS < heard) missedNow.push(o.index);
-          });
-          setLiveMissed((prev) => (prev.size === missedNow.length ? prev : new Set(missedNow)));
-        }
-        if (tick >= total) {
-          setCurrent(undefined);
-        } else {
-          let i = flat.length - 1;
-          while (i > 0 && flat[i].startTick > tick) i--;
-          setCurrent(flat[i].index);
-        }
+        setProgress(seg.startTick);
+        return;
       }
-      raf = requestAnimationFrame(loop);
+      setCountIn(null);
+      const tick = (now - seg.audioStart) / spt + seg.startTick;
+      setProgress(tick);
+      if (tick >= total) {
+        setCurrent(undefined);
+      } else {
+        let i = flat.length - 1;
+        while (i > 0 && flat[i].startTick > tick) i--;
+        setCurrent(flat[i].index);
+      }
+      if (phase === 'play') {
+        // A note is missed once its window has passed without a matching tap.
+        const heard = now - offsetMs / 1000 - seg.audioStart + seg.startTick * spt;
+        const missedNow: number[] = [];
+        onsets.forEach((o, pos) => {
+          if (!liveMatchedRef.current.has(pos) && o.time + windowS < heard) missedNow.push(o.index);
+        });
+        setLiveMissed((prev) => (prev.size === missedNow.length ? prev : new Set(missedNow)));
+      }
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [phase, engine, rhythm, bpm, flat, beatsPerBar, offsetMs]);
+  }, [phase, engine, bpm, spt, flat, beatsPerBar, total, onsets, windowS, offsetMs, setProgress]);
 
   const finish = useCallback(() => {
-    const onsets = onsetsRef.current;
-    const first = onsets[0]?.time ?? startRef.current;
-    const taps = tapsRef.current.filter((t) => t - offsetMs / 1000 >= first - EARLY_IGNORE_S);
-    const r = scoreRhythm(onsets, taps, offsetMs);
-    const spt = secondsPerTick(rhythm, bpm);
-    setResultTaps(r.taps.map((t) => ({ tick: (t.time - startRef.current) / spt, grade: t.grade })));
+    const taps = tapsRef.current.filter((t) => t >= -EARLY_IGNORE_S);
+    const r = scoreRhythm(onsets, taps, 0);
     silence();
     setResult(r);
+    setResultTaps(
+      r.taps.map((t) => ({
+        tick: t.time / spt,
+        grade: t.grade,
+        noteTick: t.note === undefined ? undefined : flat[onsets[t.note].index].startTick,
+      })),
+    );
     setRecord(recordResult(exercise.id, r.score, r.stars));
     setPhase('result');
-  }, [offsetMs, silence, exercise.id, rhythm, bpm]);
+  }, [onsets, spt, silence, exercise.id, flat]);
 
-  const begin = (kind: 'play' | 'listen') => {
+  /** Plays from `fromTick` (a measure start) to the end, after a one-bar count-in. */
+  const runSegment = (kind: 'play' | 'listen', fromTick: number) => {
     silence();
-    tapsRef.current = [];
-    startRef.current = 0;
-    liveMatchedRef.current = new Set();
-    setLiveTaps([]);
-    setLiveMissed(new Set());
-    setFlash(null);
-    if (kind === 'play') setResult(null);
     const countInBeats = beatsPerBar;
-    const totalBeats = countInBeats + rhythm.measures.length * beatsPerBar;
+    const remainingBeats = Math.round((total - fromTick) / beatTicks(rhythm.time));
     const period = 60 / bpm;
     const metronome = new Metronome(engine, {
       bpm,
       beatsPerBar,
-      maxBeats: totalBeats,
+      maxBeats: countInBeats + remainingBeats,
       audible: (i) => i < countInBeats || metronomeOn,
       onSchedule: (i, time) => {
         if (i !== 0) return;
-        startRef.current = time + countInBeats * period;
-        onsetsRef.current = noteOnsets(rhythm, bpm, startRef.current);
+        const seg = { audioStart: time + countInBeats * period, startTick: fromTick };
+        segRef.current = seg;
         if (kind === 'listen') {
-          nodesRef.current = onsetsRef.current.flatMap((o) => engine.rhythmNote(o.time));
+          nodesRef.current = onsets
+            .filter((o) => o.time >= fromTick * spt - 1e-9)
+            .flatMap((o) => engine.rhythmNote(seg.audioStart + o.time - fromTick * spt));
         }
       },
       onEnd:
@@ -168,6 +201,39 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
     void keepAwake();
   };
 
+  const begin = (kind: 'play' | 'listen') => {
+    if (kind === 'play') {
+      tapsRef.current = [];
+      liveMatchedRef.current = new Set();
+      setLiveTaps([]);
+      setLiveMissed(new Set());
+      setResult(null);
+    }
+    setFlash(null);
+    runSegment(kind, 0);
+  };
+
+  /** Pauses and rewinds to the start of the current measure, dropping what was played in it. */
+  const pause = () => {
+    const seg = segRef.current;
+    let tick = seg ? seg.startTick : 0;
+    if (seg) {
+      const now = engine.audibleNow();
+      if (now >= seg.audioStart) tick = (now - seg.audioStart) / spt + seg.startTick;
+    }
+    const from = Math.min(Math.floor(tick / perMeasure) * perMeasure, total - perMeasure);
+    const cut = from * spt - 0.05;
+    silence();
+    tapsRef.current = tapsRef.current.filter((t) => t < cut);
+    onsets.forEach((o, pos) => {
+      if (o.time >= from * spt - 1e-9) liveMatchedRef.current.delete(pos);
+    });
+    setLiveTaps((prev) => prev.filter((t) => t.tick * spt < cut));
+    setLiveMissed((prev) => new Set([...prev].filter((i) => flat[i].startTick < from)));
+    setPausedTick(from);
+    setPhase('paused');
+  };
+
   const stop = () => {
     silence();
     setPhase(result ? 'result' : 'ready');
@@ -175,26 +241,26 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
 
   const onTap = (timeStamp: number) => {
     engine.tapNow();
-    if (phase !== 'play') return;
+    const seg = segRef.current;
+    if (phase !== 'play' || !seg) return;
     const t = engine.perfToAudio(timeStamp);
-    tapsRef.current.push(t);
-    const onsets = onsetsRef.current;
-    const first = onsets[0]?.time;
+    const v = t - offsetMs / 1000 - seg.audioStart + seg.startTick * spt;
     // Taps during the count-in only make a sound.
-    if (first === undefined || t - offsetMs / 1000 < first - EARLY_IGNORE_S) {
+    if (v < seg.startTick * spt - EARLY_IGNORE_S) {
       setFlash({ grade: 'neutral', key: timeStamp });
       return;
     }
-    const tick = (t - offsetMs / 1000 - startRef.current) / secondsPerTick(rhythm, bpm);
-    const m = matchTapLive(onsets, liveMatchedRef.current, t, offsetMs);
+    tapsRef.current.push(v);
+    const m = matchTapLive(onsets, liveMatchedRef.current, v, 0);
     if (!m) {
-      setLiveTaps((prev) => [...prev, { tick, grade: 'extra' }]);
+      setLiveTaps((prev) => [...prev, { tick: v / spt, grade: 'extra' }]);
       setFlash({ grade: 'miss', key: timeStamp });
       return;
     }
     liveMatchedRef.current.add(m.pos);
     const g = grade(m.deviationMs);
-    setLiveTaps((prev) => [...prev, { tick, grade: g }]);
+    const noteTick = flat[onsets[m.pos].index].startTick;
+    setLiveTaps((prev) => [...prev, { tick: v / spt, grade: g, noteTick }]);
     setFlash({ grade: g, key: timeStamp });
   };
 
@@ -203,8 +269,9 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
     [result],
   );
 
-  const shownTaps = phase === 'play' ? liveTaps : phase === 'result' ? resultTaps : undefined;
-  const shownMissed = phase === 'play' ? liveMissed : phase === 'result' ? resultMissed : undefined;
+  const showLive = phase === 'play' || phase === 'paused';
+  const shownTaps = showLive ? liveTaps : phase === 'result' ? resultTaps : undefined;
+  const shownMissed = showLive ? liveMissed : phase === 'result' ? resultMissed : undefined;
 
   const counts = result
     ? {
@@ -215,10 +282,21 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
     : null;
 
   const running = phase === 'play' || phase === 'listen';
+  const locked = running || phase === 'paused';
   let status = exercise.hint;
   if (running && countIn !== null) status = phase === 'play' ? `Отсчёт: ${countIn}` : `Слушай: ${countIn}`;
   else if (phase === 'play') status = 'Играй!';
   else if (phase === 'listen') status = 'Слушай ритм';
+  else if (phase === 'paused') status = `Пауза. Продолжишь с такта ${pausedTick / perMeasure + 1}`;
+
+  const mainAction = () => {
+    if (phase === 'play') pause();
+    else if (phase === 'listen') stop();
+    else if (phase === 'paused') runSegment('play', pausedTick);
+    else begin('play');
+  };
+  const mainLabel =
+    phase === 'play' ? 'Пауза' : phase === 'listen' ? 'Стоп' : phase === 'paused' ? 'Продолжить' : 'Играть';
 
   return (
     <main className="app exercise">
@@ -227,7 +305,7 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
           ←
         </button>
         <h1>{exercise.title}</h1>
-        <button className="icon" onClick={onOpenSettings} disabled={running} aria-label="Настройки">
+        <button className="icon" onClick={onOpenSettings} disabled={locked} aria-label="Настройки">
           ⚙︎
         </button>
       </header>
@@ -237,20 +315,39 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
           <span>
             размер {rhythm.time.beats}/{rhythm.time.unit}
           </span>
+          <button className={`play-toggle ${phase}`} onClick={mainAction} aria-label={mainLabel}>
+            {phase === 'play' ? (
+              <svg viewBox="0 0 24 24" aria-hidden>
+                <rect x="6" y="4" width="4" height="16" rx="1" />
+                <rect x="14" y="4" width="4" height="16" rx="1" />
+              </svg>
+            ) : phase === 'listen' ? (
+              <svg viewBox="0 0 24 24" aria-hidden>
+                <rect x="6" y="6" width="12" height="12" rx="1.5" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" aria-hidden>
+                <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z" />
+              </svg>
+            )}
+          </button>
           <span>{bpm} BPM</span>
+        </div>
+        <div className="progress-track">
+          <div className="progress-fill" ref={progressRef} />
         </div>
         <Notation rhythm={rhythm} current={current} taps={shownTaps} missed={shownMissed} />
       </section>
 
       <div className="toolbar">
         <div className="tempo">
-          <button onClick={() => setBpm((b) => Math.max(40, b - 5))} disabled={running} aria-label="Медленнее">
+          <button onClick={() => setBpm((b) => Math.max(40, b - 5))} disabled={locked} aria-label="Медленнее">
             −
           </button>
           <span>
             <strong>{bpm}</strong>
           </span>
-          <button onClick={() => setBpm((b) => Math.min(200, b + 5))} disabled={running} aria-label="Быстрее">
+          <button onClick={() => setBpm((b) => Math.min(200, b + 5))} disabled={locked} aria-label="Быстрее">
             +
           </button>
         </div>
@@ -306,9 +403,16 @@ export function ExerciseScreen({ engine, exercise, offsetMs, onBack, onOpenSetti
 
       <div className="buttons">
         {running ? (
-          <button className="danger" onClick={stop}>
-            Стоп
+          <button className={phase === 'play' ? '' : 'danger'} onClick={mainAction}>
+            {mainLabel}
           </button>
+        ) : phase === 'paused' ? (
+          <>
+            <button onClick={() => begin('play')}>Заново</button>
+            <button className="primary" onClick={mainAction}>
+              Продолжить
+            </button>
+          </>
         ) : (
           <>
             <button onClick={() => begin('listen')}>Послушать</button>

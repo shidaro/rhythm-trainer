@@ -736,3 +736,79 @@ button.icon {
   flex: 1;
   accent-color: var(--accent);
 }
+
+/* ---------- scrolling notation, progress, play toggle ---------- */
+
+.notation-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.notation-card .notation-meta {
+  align-items: center;
+  padding: 6px 14px;
+}
+
+.play-toggle {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+
+.play-toggle svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+}
+
+.play-toggle.listen {
+  color: var(--miss);
+}
+
+.progress-track {
+  height: 4px;
+  background: var(--border);
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+
+.notation-viewport {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.notation-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.notation svg .row-bg {
+  fill: transparent;
+  stroke: none;
+  transition: fill 150ms;
+}
+
+.notation svg .row-bg.current {
+  fill: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.notation svg .measure-num {
+  fill: var(--muted);
+  stroke: none;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.buttons button {
+  white-space: nowrap;
+  padding-inline: 10px;
+}

@@ -14,10 +14,17 @@ export interface MeasureGeometry {
   minX: number;
 }
 
-/** Position of a moment in time on the notation. Taps outside the rhythm are clamped to its edges. */
-export function tickToPoint(geoms: readonly MeasureGeometry[], tick: number): { x: number; y: number } | null {
+/**
+ * Position of a moment in time on the notation. Taps outside the rhythm are clamped to its edges.
+ * `anchorTick` picks the measure (row) explicitly, e.g. the note a slightly early tap belongs to.
+ */
+export function tickToPoint(
+  geoms: readonly MeasureGeometry[],
+  tick: number,
+  anchorTick: number = tick,
+): { x: number; y: number } | null {
   if (!geoms.length) return null;
-  let g = geoms.find((m) => tick >= m.startTick && tick < m.endTick);
+  let g = geoms.find((m) => anchorTick >= m.startTick && anchorTick < m.endTick);
   if (!g) g = tick < geoms[0].startTick ? geoms[0] : geoms[geoms.length - 1];
 
   const anchors = [...g.points, { tick: g.endTick, x: g.endX }];

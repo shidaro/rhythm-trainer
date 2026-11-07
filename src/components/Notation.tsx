@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Beam, Dot, Formatter, Fraction, Renderer, Stave, StaveNote, Voice } from 'vexflow/bravura';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Beam, BarlineType, Dot, Formatter, Fraction, Renderer, Stave, StaveNote, Voice } from 'vexflow/bravura';
 import { PPQ, beatTicks, flatten, measureTicks } from '../core/rhythm';
 import type { Rhythm, RhythmEvent } from '../core/rhythm';
 import type { TapGrade } from '../core/scoring';
@@ -10,6 +10,8 @@ import type { MeasureGeometry } from './notationGeometry';
 export interface TapDot {
   tick: number;
   grade: TapGrade;
+  /** Start tick of the matched note: keeps the dot in that note's row. */
+  noteTick?: number;
 }
 
 interface Props {
@@ -24,11 +26,13 @@ interface Props {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const DOT_R = 4.5;
-
-const STAVE_HEIGHT = 80;
-const ROW_GAP = 12;
+/** Logical height of one measure row (staff + tap dots underneath). */
+const ROW_H = 84;
 /** VexFlow reserves room above the staff that a single-line rhythm staff does not need. */
 const STAVE_TOP_TRIM = 18;
+/** Room on the left for the measure number. */
+const NUM_W = 26;
+const VISIBLE_ROWS = 3;
 
 let fontsReady: Promise<unknown> | null = null;
 function loadFonts() {
@@ -48,75 +52,39 @@ function beamGroups(r: Rhythm): Fraction[] {
   return [new Fraction(beatTicks(r.time) / PPQ, 4)];
 }
 
-/** Approximate horizontal room one note needs, in logical px. */
-const PX_PER_NOTE = 26;
-const MAX_PER_ROW = 4;
-
-interface Box {
-  row: number;
-  col: number;
-  x: number;
-  w: number;
+function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+  return el;
 }
 
-/**
- * Packs measures into rows so busy measures get enough room, then splits each
- * row's width in proportion to how many notes each measure holds.
- */
-function layoutRows(r: Rhythm, rowWidth: number): { rows: number; boxes: Box[] } {
-  const weights = r.measures.map((ev) => ev.length + 1.5);
-  const capacity = rowWidth / PX_PER_NOTE;
-  const rows: number[][] = [];
-  let cur: number[] = [];
-  let sum = 0;
-  weights.forEach((w, m) => {
-    if (cur.length && (sum + w > capacity || cur.length >= MAX_PER_ROW)) {
-      rows.push(cur);
-      cur = [];
-      sum = 0;
-    }
-    cur.push(m);
-    sum += w;
-  });
-  if (cur.length) rows.push(cur);
-
-  const boxes: Box[] = [];
-  rows.forEach((ms, row) => {
-    const total = ms.reduce((s, m) => s + weights[m], 0);
-    let x = 0;
-    ms.forEach((m, col) => {
-      const w = (rowWidth * weights[m]) / total;
-      boxes[m] = { row, col, x, w };
-      x += w;
-    });
-  });
-  return { rows: rows.length, boxes };
-}
-
-function drawRhythm(host: HTMLDivElement, rhythm: Rhythm, width: number): MeasureGeometry[] {
+/** One measure per row, numbered on the left. Returns tap-positioning geometry and the row height in px. */
+function drawRhythm(
+  host: HTMLDivElement,
+  rhythm: Rhythm,
+  width: number,
+): { geoms: MeasureGeometry[]; rowPx: number } {
   // Draw in a smaller logical space and scale up: bigger, easier-to-read notes on phones.
   const scale = width < 420 ? 1.15 : 1.35;
   const logical = width / scale;
-  const usable = logical - 2;
-  const firstExtra = 60; // room for clef + time signature in the first measure of a row
-  const layout = layoutRows(rhythm, usable - firstExtra);
+  const rows = rhythm.measures.length;
   const renderer = new Renderer(host, Renderer.Backends.SVG);
-  renderer.resize(width, Math.ceil(layout.rows * (STAVE_HEIGHT + ROW_GAP) * scale));
+  renderer.resize(width, Math.ceil(rows * ROW_H * scale));
   const ctx = renderer.getContext();
   ctx.scale(scale, scale);
+  const svg = host.querySelector('svg')!;
 
   const flat = flatten(rhythm);
-  const indices = new Map<StaveNote, number>();
-  let flatIndex = 0;
-  const geoms: MeasureGeometry[] = [];
   const perMeasure = measureTicks(rhythm.time);
+  const geoms: MeasureGeometry[] = [];
+  const backgrounds: SVGElement[] = [];
+  let flatIndex = 0;
 
   rhythm.measures.forEach((events, m) => {
-    const { row, col, x: rx, w: rw } = layout.boxes[m];
-    const x = col === 0 ? 0 : firstExtra + rx;
-    const w = col === 0 ? rw + firstExtra : rw;
+    const y0 = m * ROW_H;
+    backgrounds.push(svgEl('rect', { x: 0, y: y0, width: logical, height: ROW_H, class: `row-bg row-${m}` }));
 
-    const stave = new Stave(x, row * (STAVE_HEIGHT + ROW_GAP) - STAVE_TOP_TRIM, w);
+    const stave = new Stave(NUM_W, y0 - STAVE_TOP_TRIM, logical - NUM_W - 2);
     stave.setConfigForLines([
       { visible: false },
       { visible: false },
@@ -124,18 +92,22 @@ function drawRhythm(host: HTMLDivElement, rhythm: Rhythm, width: number): Measur
       { visible: false },
       { visible: false },
     ]);
-    if (col === 0) stave.addClef('percussion');
-    if (m === 0) stave.addTimeSignature(`${rhythm.time.beats}/${rhythm.time.unit}`);
-    if (m === rhythm.measures.length - 1) stave.setEndBarType(3); // final double bar
+    stave.setBegBarType(BarlineType.NONE);
+    stave.setEndBarType(m === rows - 1 ? BarlineType.END : BarlineType.NONE);
     stave.setContext(ctx).draw();
+    const lineY = stave.getYForLine(2);
+
+    const num = svgEl('text', { x: 6, y: lineY - 8, class: 'measure-num' });
+    num.textContent = String(m + 1);
+    svg.appendChild(num);
 
     const notes = events.map((e) => {
       const note = new StaveNote({ keys: ['b/4'], duration: vfDuration(e), stemDirection: 1 });
       if (e.dotted) Dot.buildAndAttach([note], { all: true });
-      indices.set(note, flat[flatIndex].index);
-      flatIndex++;
       return note;
     });
+    const first = flatIndex;
+    flatIndex += events.length;
 
     const voice = new Voice({ numBeats: rhythm.time.beats, beatValue: rhythm.time.unit });
     voice.addTickables(notes);
@@ -143,52 +115,48 @@ function drawRhythm(host: HTMLDivElement, rhythm: Rhythm, width: number): Measur
     new Formatter().joinVoices([voice]).formatToStave([voice], stave);
     voice.draw(ctx, stave);
     beams.forEach((b) => b.setContext(ctx).draw());
-    for (const note of notes) note.getSVGElement()?.classList.add('ev', `ev-${indices.get(note)}`);
 
-    const dotY = stave.getYForLine(2) + 30;
+    const dotY = lineY + 28;
     const centre = (n: StaveNote) => (n.getNoteHeadBeginX() + n.getNoteHeadEndX()) / 2;
-    const startTick = m * perMeasure;
-    let tick = startTick;
-    const points = notes.map((n) => {
-      const p = { tick, x: centre(n) };
-      tick += flat[indices.get(n)!].ticks;
-      return p;
-    });
-    geoms.push({
-      startTick,
-      endTick: startTick + perMeasure,
-      y: dotY,
-      points,
-      endX: stave.getNoteEndX() - 4,
-      minX: stave.getNoteStartX(),
+    notes.forEach((note, k) => {
+      const ev = flat[first + k];
+      note.getSVGElement()?.classList.add('ev', `ev-${ev.index}`);
+      // Hollow circle under each sounding note, shown only if the note was missed.
+      if (!ev.event.rest) {
+        svg.appendChild(
+          svgEl('circle', { cx: centre(note), cy: dotY, r: DOT_R, class: `missed-mark missed-${ev.index}` }),
+        );
+      }
     });
 
-    // Hollow circles under sounding notes, shown only if the note was missed.
-    events.forEach((e, k) => {
-      if (e.rest) return;
-      const note = notes[k];
-      const circle = document.createElementNS(SVG_NS, 'circle');
-      circle.setAttribute('cx', String(centre(note)));
-      circle.setAttribute('cy', String(dotY));
-      circle.setAttribute('r', String(DOT_R));
-      circle.setAttribute('class', `missed-mark missed-${indices.get(note)}`);
-      host.querySelector('svg')?.appendChild(circle);
+    geoms.push({
+      startTick: m * perMeasure,
+      endTick: (m + 1) * perMeasure,
+      y: dotY,
+      points: notes.map((n, k) => ({ tick: flat[first + k].startTick, x: centre(n) })),
+      endX: stave.getNoteEndX() - 4,
+      minX: NUM_W + 4,
     });
   });
 
-  const tapLayer = document.createElementNS(SVG_NS, 'g');
-  tapLayer.setAttribute('class', 'tap-layer');
-  host.querySelector('svg')?.appendChild(tapLayer);
-  return geoms;
+  // Row backgrounds go underneath everything else.
+  svg.prepend(...backgrounds);
+  svg.appendChild(svgEl('g', { class: 'tap-layer' }));
+  return { geoms, rowPx: ROW_H * scale };
 }
 
-/** Renders a rhythm on a single-line percussion staff with VexFlow. */
+/** Renders a rhythm one measure per row on a single-line staff, scrolling to follow the playhead. */
 export function Notation({ rhythm, current, taps, missed }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const geomsRef = useRef<MeasureGeometry[]>([]);
   const [width, setWidth] = useState(0);
   const [ready, setReady] = useState(false);
   const [rendered, setRendered] = useState(0);
-  const geomsRef = useRef<MeasureGeometry[]>([]);
+  const [rowPx, setRowPx] = useState(0);
+
+  const flat = useMemo(() => flatten(rhythm), [rhythm]);
+  const currentMeasure = current === undefined ? undefined : flat[current]?.measure;
 
   useEffect(() => {
     void loadFonts().then(() => setReady(true));
@@ -207,7 +175,9 @@ export function Notation({ rhythm, current, taps, missed }: Props) {
     if (!host || !ready || width < 100) return;
     host.querySelector('svg')?.remove();
     try {
-      geomsRef.current = drawRhythm(host, rhythm, width);
+      const out = drawRhythm(host, rhythm, width);
+      geomsRef.current = out.geoms;
+      setRowPx(out.rowPx);
     } catch (err) {
       console.error('Notation render failed', err);
       geomsRef.current = [];
@@ -216,7 +186,7 @@ export function Notation({ rhythm, current, taps, missed }: Props) {
     setRendered((n) => n + 1);
   }, [rhythm, width, ready]);
 
-  // Highlight the current note without re-rendering.
+  // Current note and current row highlight.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -224,7 +194,23 @@ export function Notation({ rhythm, current, taps, missed }: Props) {
       const m = /ev-(\d+)/.exec(el.getAttribute('class') ?? '');
       if (m) el.classList.toggle('current', Number(m[1]) === current);
     });
-  }, [current, rendered]);
+    host.querySelectorAll('.row-bg').forEach((el) => {
+      const m = /row-(\d+)/.exec(el.getAttribute('class') ?? '');
+      if (m) el.classList.toggle('current', Number(m[1]) === currentMeasure);
+    });
+  }, [current, currentMeasure, rendered]);
+
+  // Keep the playing measure in the middle row of the window.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp || currentMeasure === undefined || !rowPx) return;
+    vp.scrollTo({ top: Math.max(0, (currentMeasure - 1) * rowPx), behavior: 'smooth' });
+  }, [currentMeasure, rowPx]);
+
+  // Back to the top when a new attempt starts (no taps yet, nothing playing).
+  useEffect(() => {
+    if (!taps?.length && current === undefined) viewportRef.current?.scrollTo({ top: 0 });
+  }, [taps, current]);
 
   // Missed notes and tap dots.
   useEffect(() => {
@@ -238,17 +224,17 @@ export function Notation({ rhythm, current, taps, missed }: Props) {
     if (!layer) return;
     layer.replaceChildren(
       ...(taps ?? []).flatMap((t) => {
-        const p = tickToPoint(geomsRef.current, t.tick);
+        const p = tickToPoint(geomsRef.current, t.tick, t.noteTick);
         if (!p) return [];
-        const c = document.createElementNS(SVG_NS, 'circle');
-        c.setAttribute('cx', String(p.x));
-        c.setAttribute('cy', String(p.y));
-        c.setAttribute('r', String(DOT_R));
-        c.setAttribute('class', `tap-dot ${t.grade}`);
-        return [c];
+        return [svgEl('circle', { cx: p.x, cy: p.y, r: DOT_R, class: `tap-dot ${t.grade}` })];
       }),
     );
   }, [taps, missed, rendered]);
 
-  return <div className="notation" ref={hostRef} aria-label="Ноты" />;
+  const visible = Math.min(VISIBLE_ROWS, rhythm.measures.length);
+  return (
+    <div className="notation-viewport" ref={viewportRef} style={rowPx ? { height: visible * rowPx } : undefined}>
+      <div className="notation" ref={hostRef} aria-label="Ноты" />
+    </div>
+  );
 }
